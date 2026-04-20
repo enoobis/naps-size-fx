@@ -3,6 +3,7 @@ const gallery = document.getElementById("gallery");
 const template = document.getElementById("page-card-template");
 const dpiSelect = document.getElementById("dpi-select");
 const downloadBtn = document.getElementById("download-btn");
+const previewToggle = document.getElementById("preview-toggle");
 const PREVIEW_SIZE = 240;
 
 const pdfjs = globalThis.pdfjsLib;
@@ -13,6 +14,7 @@ if (pdfjs) {
 
 const state = {
   p: Number(dpiSelect.value),
+  showPreview: previewToggle.checked,
   files: [],
   hasSupportedFiles: false,
   isBuildingDownload: false,
@@ -31,6 +33,12 @@ input.addEventListener("change", async (event) => {
 
 dpiSelect.addEventListener("change", async () => {
   state.p = Number(dpiSelect.value);
+  if (!state.files.length) return;
+  await renderFiles(state.files);
+});
+
+previewToggle.addEventListener("change", async () => {
+  state.showPreview = previewToggle.checked;
   if (!state.files.length) return;
   await renderFiles(state.files);
 });
@@ -83,19 +91,25 @@ async function renderFiles(files) {
 
   for (const file of files) {
     if (isImage(file)) {
-      addImagePreview(file);
       state.hasSupportedFiles = true;
+      if (state.showPreview) {
+        addImagePreview(file);
+      }
       continue;
     }
 
     if (isPdf(file)) {
-      await addPdfPreview(file);
       state.hasSupportedFiles = true;
+      if (state.showPreview) {
+        await addPdfPreview(file);
+      }
     }
   }
 
   if (!state.hasSupportedFiles) {
     renderEmptyState("no supported files");
+  } else if (!state.showPreview) {
+    renderEmptyState("preview off");
   }
   updateDownloadButton();
 }
