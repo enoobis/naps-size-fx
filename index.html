@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>viewer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  >
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <label for="file-input" class="upload-button">choose files</label>
+      <input
+        id="file-input"
+        type="file"
+        accept=".pdf,image/*"
+        multiple
+      >
+    </header>
+
+    <section class="controls">
+      <label for="dpi-select">p</label>
+      <select id="dpi-select">
+        <option value="100">100 p</option>
+        <option value="200">200 p</option>
+        <option value="300" selected>300 p</option>
+        <option value="500">500 p</option>
+        <option value="600">600 p</option>
+      </select>
+    </section>
+
+    <section id="gallery" class="gallery" aria-live="polite"></section>
+  </main>
+
+  <template id="page-card-template">
+    <article class="card">
+      <div class="card-header">
+        <p class="file-name"></p>
+        <p class="file-meta"></p>
+      </div>
+      <div class="page-frame"></div>
+    </article>
+  </template>
+
+  <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.min.mjs" type="module"></script>
+  <script type="module" src="./script.js"></script>
+</body>
+</html>
