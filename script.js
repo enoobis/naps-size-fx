@@ -119,22 +119,27 @@ async function addPdfPreview(file) {
   }
 
   const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  const page = await doc.getPage(1);
-  const baseViewport = page.getViewport({ scale: 1 });
-  const previewScale = Math.min(PREVIEW_SIZE / baseViewport.width, PREVIEW_SIZE / baseViewport.height);
-  const previewViewport = page.getViewport({ scale: Math.max(0.2, previewScale) });
+  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+    const page = await doc.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const previewScale = Math.min(
+      PREVIEW_SIZE / baseViewport.width,
+      PREVIEW_SIZE / baseViewport.height,
+    );
+    const previewViewport = page.getViewport({ scale: Math.max(0.2, previewScale) });
 
-  const frame = createCard(file.name, `preview 1/${doc.numPages}`, PREVIEW_SIZE);
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.floor(previewViewport.width));
-  canvas.height = Math.max(1, Math.floor(previewViewport.height));
-  frame.appendChild(canvas);
+    const frame = createCard(file.name, `preview ${pageNumber}/${doc.numPages}`, PREVIEW_SIZE);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(previewViewport.width));
+    canvas.height = Math.max(1, Math.floor(previewViewport.height));
+    frame.appendChild(canvas);
 
-  const context = canvas.getContext("2d", { alpha: false });
-  await page.render({
-    canvasContext: context,
-    viewport: previewViewport,
-  }).promise;
+    const context = canvas.getContext("2d", { alpha: false });
+    await page.render({
+      canvasContext: context,
+      viewport: previewViewport,
+    }).promise;
+  }
 
   doc.cleanup();
 }
