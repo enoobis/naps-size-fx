@@ -38,6 +38,12 @@ body {
   padding: 28px;
 }
 
+.hero-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 #file-input {
   display: none;
 }
@@ -64,6 +70,16 @@ body {
 
 .upload-button:active {
   transform: translate(2px, 2px);
+}
+
+.upload-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.upload-button:disabled:hover {
+  background: #000000;
+  color: var(--text);
 }
 
 .controls {

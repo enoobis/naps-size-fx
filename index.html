@@ -15,7 +15,10 @@
 <body>
   <main class="app">
     <header class="hero">
-      <label for="file-input" class="upload-button">choose files</label>
+      <div class="hero-actions">
+        <label for="file-input" class="upload-button">choose files</label>
+        <button id="download-btn" class="upload-button" type="button" disabled>download</button>
+      </div>
       <input
         id="file-input"
         type="file"
@@ -49,6 +52,7 @@
   </template>
 
   <script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.min.mjs" type="module"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script type="module" src="./script.js"></script>
 </body>
 </html>

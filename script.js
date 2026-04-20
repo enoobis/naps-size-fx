@@ -2,7 +2,7 @@ const input = document.getElementById("file-input");
 const gallery = document.getElementById("gallery");
 const template = document.getElementById("page-card-template");
 const dpiSelect = document.getElementById("dpi-select");
-const FRAME_HEIGHT = 560;
+const downloadBtn = document.getElementById("download-btn");
 
 const pdfjs = globalThis.pdfjsLib;
 if (pdfjs) {
@@ -11,9 +11,9 @@ if (pdfjs) {
 }
 
 const state = {
-  dpi: Number(dpiSelect.value),
+  p: Number(dpiSelect.value),
   files: [],
-  objectUrls: [],
+  downloads: [],
 };
 
 renderEmptyState();
@@ -22,14 +22,44 @@ input.addEventListener("change", async (event) => {
   const files = Array.from(event.target.files || []);
   if (!files.length) return;
   state.files = files;
-  await renderFiles(state.files);
+  await renderFiles(files);
   input.value = "";
 });
 
 dpiSelect.addEventListener("change", async () => {
-  state.dpi = Number(dpiSelect.value);
+  state.p = Number(dpiSelect.value);
   if (!state.files.length) return;
   await renderFiles(state.files);
+});
+
+downloadBtn.addEventListener("click", async () => {
+  if (!state.downloads.length) return;
+
+  if (state.downloads.length === 1) {
+    const single = state.downloads[0];
+    triggerDownload(single.blob, single.name);
+    return;
+  }
+
+  if (!globalThis.JSZip) {
+    // Fallback: if zip lib fails, download files one by one.
+    state.downloads.forEach((item) => triggerDownload(item.blob, item.name));
+    return;
+  }
+
+  downloadBtn.disabled = true;
+  downloadBtn.textContent = "building...";
+
+  const zip = new globalThis.JSZip();
+  state.downloads.forEach((item) => {
+    zip.file(item.name, item.blob);
+  });
+
+  const zipBlob = await zip.generateAsync({ type: "blob" });
+  triggerDownload(zipBlob, `processed-${state.p}p.zip`);
+
+  downloadBtn.textContent = "download";
+  downloadBtn.disabled = false;
 });
 
 function isImage(file) {
@@ -42,16 +72,78 @@ function isPdf(file) {
 
 async function renderFiles(files) {
   clearGallery();
+  setDownloadEnabled(false);
 
   for (const file of files) {
     if (isImage(file)) {
-      addImageCard(file);
+      await addProcessedImage(file);
       continue;
     }
 
     if (isPdf(file)) {
-      await addPdfCards(file);
+      await addProcessedPdf(file);
     }
+  }
+
+  if (!state.downloads.length) {
+    renderEmptyState("no supported files");
+    return;
+  }
+
+  setDownloadEnabled(true);
+}
+
+async function addProcessedImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const output = createFittedCanvas(bitmap, state.p);
+  const frame = createCard(file.name, `${state.p} x ${state.p}`);
+  frame.appendChild(output);
+
+  const blob = await canvasToBlob(output);
+  if (!blob) return;
+
+  const safeName = getSafeFileName(file.name, "image", ".png");
+  state.downloads.push({
+    name: `${safeName}-${state.p}p.png`,
+    blob,
+  });
+}
+
+async function addProcessedPdf(file) {
+  if (!pdfjs) {
+    const frame = createCard(file.name, "pdf");
+    frame.innerHTML = "<p class='placeholder'>pdf viewer failed to load</p>";
+    return;
+  }
+
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const baseName = getSafeFileName(file.name, "document", "");
+
+  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+    const page = await doc.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 2 });
+
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = Math.max(1, Math.floor(viewport.width));
+    sourceCanvas.height = Math.max(1, Math.floor(viewport.height));
+    const sourceContext = sourceCanvas.getContext("2d", { alpha: false });
+
+    await page.render({
+      canvasContext: sourceContext,
+      viewport,
+    }).promise;
+
+    const output = createFittedCanvas(sourceCanvas, state.p);
+    const frame = createCard(file.name, `page ${pageNumber} - ${state.p} x ${state.p}`);
+    frame.appendChild(output);
+
+    const blob = await canvasToBlob(output);
+    if (!blob) continue;
+
+    state.downloads.push({
+      name: `${baseName}-page-${pageNumber}-${state.p}p.png`,
+      blob,
+    });
   }
 }
 
@@ -64,74 +156,70 @@ function createCard(fileName, meta) {
 
   name.textContent = fileName;
   fileMeta.textContent = meta;
-  frame.style.height = `${FRAME_HEIGHT}px`;
+  frame.style.height = `${state.p}px`;
 
   gallery.appendChild(card);
   return frame;
 }
 
-function addImageCard(file) {
-  const url = URL.createObjectURL(file);
-  state.objectUrls.push(url);
-  const frame = createCard(file.name, "Image");
-  const img = document.createElement("img");
-  img.alt = file.name;
-  img.src = url;
-  frame.appendChild(img);
+function createFittedCanvas(source, size) {
+  const sourceWidth = source.width || source.videoWidth || source.naturalWidth || 1;
+  const sourceHeight = source.height || source.videoHeight || source.naturalHeight || 1;
+
+  const output = document.createElement("canvas");
+  output.width = size;
+  output.height = size;
+
+  const ctx = output.getContext("2d", { alpha: false });
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, size, size);
+
+  const scale = Math.min(size / sourceWidth, size / sourceHeight);
+  const targetWidth = Math.max(1, Math.floor(sourceWidth * scale));
+  const targetHeight = Math.max(1, Math.floor(sourceHeight * scale));
+  const offsetX = Math.floor((size - targetWidth) / 2);
+  const offsetY = Math.floor((size - targetHeight) / 2);
+
+  ctx.drawImage(source, offsetX, offsetY, targetWidth, targetHeight);
+  return output;
 }
 
-async function addPdfCards(file) {
-  if (!pdfjs) {
-    const frame = createCard(file.name, "PDF");
-    frame.innerHTML = "<p class='placeholder'>PDF viewer failed to load.</p>";
-    return;
-  }
+async function canvasToBlob(canvas) {
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), "image/png", 0.95);
+  });
+}
 
-  const buffer = await file.arrayBuffer();
-  const doc = await pdfjs.getDocument({ data: buffer }).promise;
-  const qualityFactor = state.dpi / 100;
+function triggerDownload(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
 
-  for (let index = 1; index <= doc.numPages; index += 1) {
-    const page = await doc.getPage(index);
-    const viewport = page.getViewport({ scale: 1 });
-    const scale = Math.min(
-      (gallery.clientWidth - 80) / viewport.width,
-      FRAME_HEIGHT / viewport.height,
-    );
-    const finalScale = Number.isFinite(scale) && scale > 0 ? scale : 1;
-    const renderViewport = page.getViewport({ scale: finalScale * qualityFactor });
-
-    const frame = createCard(
-      file.name,
-      `Page ${index} / ${doc.numPages} - ${state.dpi} p`,
-    );
-    const canvas = document.createElement("canvas");
-    const context = canvas.getContext("2d", { alpha: false });
-    canvas.width = Math.floor(renderViewport.width);
-    canvas.height = Math.floor(renderViewport.height);
-
-    await page.render({
-      canvasContext: context,
-      viewport: renderViewport,
-    }).promise;
-
-    frame.appendChild(canvas);
-  }
+function getSafeFileName(inputName, fallback, forcedExtension) {
+  const clean = inputName.replace(/[\\/:*?"<>|]/g, "-");
+  const lastDot = clean.lastIndexOf(".");
+  const base = lastDot > 0 ? clean.slice(0, lastDot) : clean || fallback;
+  return forcedExtension ? `${base}${forcedExtension}` : base;
 }
 
 function clearGallery() {
   gallery.replaceChildren();
-
-  for (const url of state.objectUrls) {
-    URL.revokeObjectURL(url);
-  }
-  state.objectUrls = [];
+  state.downloads = [];
 }
 
-function renderEmptyState() {
+function setDownloadEnabled(enabled) {
+  downloadBtn.disabled = !enabled;
+}
+
+function renderEmptyState(message = "no files loaded yet") {
   const placeholder = document.createElement("div");
   placeholder.className = "placeholder";
-  placeholder.textContent =
-    "No files loaded yet. Use Choose files to upload PDFs or images.";
+  placeholder.textContent = message;
   gallery.replaceChildren(placeholder);
 }
