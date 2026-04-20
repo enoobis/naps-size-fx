@@ -3,6 +3,7 @@ const gallery = document.getElementById("gallery");
 const template = document.getElementById("page-card-template");
 const dpiSelect = document.getElementById("dpi-select");
 const downloadBtn = document.getElementById("download-btn");
+const PREVIEW_SIZE = 240;
 
 const pdfjs = globalThis.pdfjsLib;
 if (pdfjs) {
@@ -13,7 +14,9 @@ if (pdfjs) {
 const state = {
   p: Number(dpiSelect.value),
   files: [],
-  downloads: [],
+  hasSupportedFiles: false,
+  isBuildingDownload: false,
+  previewObjectUrls: [],
 };
 
 renderEmptyState();
@@ -33,33 +36,37 @@ dpiSelect.addEventListener("change", async () => {
 });
 
 downloadBtn.addEventListener("click", async () => {
-  if (!state.downloads.length) return;
+  if (!state.hasSupportedFiles || state.isBuildingDownload) return;
 
-  if (state.downloads.length === 1) {
-    const single = state.downloads[0];
-    triggerDownload(single.blob, single.name);
-    return;
+  state.isBuildingDownload = true;
+  updateDownloadButton();
+
+  try {
+    const outputs = await buildDownloadOutputs(state.files);
+    if (!outputs.length) return;
+
+    if (outputs.length === 1) {
+      triggerDownload(outputs[0].blob, outputs[0].name);
+      return;
+    }
+
+    if (!globalThis.JSZip) {
+      // Fallback: if zip lib fails, download files one by one.
+      outputs.forEach((item) => triggerDownload(item.blob, item.name));
+      return;
+    }
+
+    const zip = new globalThis.JSZip();
+    outputs.forEach((item) => {
+      zip.file(item.name, item.blob);
+    });
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    triggerDownload(zipBlob, `processed-${state.p}p.zip`);
+  } finally {
+    state.isBuildingDownload = false;
+    updateDownloadButton();
   }
-
-  if (!globalThis.JSZip) {
-    // Fallback: if zip lib fails, download files one by one.
-    state.downloads.forEach((item) => triggerDownload(item.blob, item.name));
-    return;
-  }
-
-  downloadBtn.disabled = true;
-  downloadBtn.textContent = "building...";
-
-  const zip = new globalThis.JSZip();
-  state.downloads.forEach((item) => {
-    zip.file(item.name, item.blob);
-  });
-
-  const zipBlob = await zip.generateAsync({ type: "blob" });
-  triggerDownload(zipBlob, `processed-${state.p}p.zip`);
-
-  downloadBtn.textContent = "download";
-  downloadBtn.disabled = false;
 });
 
 function isImage(file) {
@@ -72,44 +79,39 @@ function isPdf(file) {
 
 async function renderFiles(files) {
   clearGallery();
-  setDownloadEnabled(false);
+  state.hasSupportedFiles = false;
 
   for (const file of files) {
     if (isImage(file)) {
-      await addProcessedImage(file);
+      addImagePreview(file);
+      state.hasSupportedFiles = true;
       continue;
     }
 
     if (isPdf(file)) {
-      await addProcessedPdf(file);
+      await addPdfPreview(file);
+      state.hasSupportedFiles = true;
     }
   }
 
-  if (!state.downloads.length) {
+  if (!state.hasSupportedFiles) {
     renderEmptyState("no supported files");
-    return;
   }
-
-  setDownloadEnabled(true);
+  updateDownloadButton();
 }
 
-async function addProcessedImage(file) {
-  const bitmap = await createImageBitmap(file);
-  const output = createFittedCanvas(bitmap, state.p);
-  const frame = createCard(file.name, `${state.p} x ${state.p}`);
-  frame.appendChild(output);
-
-  const blob = await canvasToBlob(output);
-  if (!blob) return;
-
-  const safeName = getSafeFileName(file.name, "image", ".png");
-  state.downloads.push({
-    name: `${safeName}-${state.p}p.png`,
-    blob,
-  });
+function addImagePreview(file) {
+  const frame = createCard(file.name, "preview", PREVIEW_SIZE);
+  const img = document.createElement("img");
+  const url = URL.createObjectURL(file);
+  state.previewObjectUrls.push(url);
+  img.src = url;
+  img.alt = file.name;
+  img.loading = "lazy";
+  frame.appendChild(img);
 }
 
-async function addProcessedPdf(file) {
+async function addPdfPreview(file) {
   if (!pdfjs) {
     const frame = createCard(file.name, "pdf");
     frame.innerHTML = "<p class='placeholder'>pdf viewer failed to load</p>";
@@ -117,37 +119,27 @@ async function addProcessedPdf(file) {
   }
 
   const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
-  const baseName = getSafeFileName(file.name, "document", "");
+  const page = await doc.getPage(1);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const previewScale = Math.min(PREVIEW_SIZE / baseViewport.width, PREVIEW_SIZE / baseViewport.height);
+  const previewViewport = page.getViewport({ scale: Math.max(0.2, previewScale) });
 
-  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-    const page = await doc.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 2 });
+  const frame = createCard(file.name, `preview 1/${doc.numPages}`, PREVIEW_SIZE);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.floor(previewViewport.width));
+  canvas.height = Math.max(1, Math.floor(previewViewport.height));
+  frame.appendChild(canvas);
 
-    const sourceCanvas = document.createElement("canvas");
-    sourceCanvas.width = Math.max(1, Math.floor(viewport.width));
-    sourceCanvas.height = Math.max(1, Math.floor(viewport.height));
-    const sourceContext = sourceCanvas.getContext("2d", { alpha: false });
+  const context = canvas.getContext("2d", { alpha: false });
+  await page.render({
+    canvasContext: context,
+    viewport: previewViewport,
+  }).promise;
 
-    await page.render({
-      canvasContext: sourceContext,
-      viewport,
-    }).promise;
-
-    const output = createFittedCanvas(sourceCanvas, state.p);
-    const frame = createCard(file.name, `page ${pageNumber} - ${state.p} x ${state.p}`);
-    frame.appendChild(output);
-
-    const blob = await canvasToBlob(output);
-    if (!blob) continue;
-
-    state.downloads.push({
-      name: `${baseName}-page-${pageNumber}-${state.p}p.png`,
-      blob,
-    });
-  }
+  doc.cleanup();
 }
 
-function createCard(fileName, meta) {
+function createCard(fileName, meta, frameSize = state.p) {
   const node = template.content.cloneNode(true);
   const card = node.querySelector(".card");
   const name = node.querySelector(".file-name");
@@ -156,7 +148,7 @@ function createCard(fileName, meta) {
 
   name.textContent = fileName;
   fileMeta.textContent = meta;
-  frame.style.height = `${state.p}px`;
+  frame.style.height = `${frameSize}px`;
 
   gallery.appendChild(card);
   return frame;
@@ -182,6 +174,73 @@ function createFittedCanvas(source, size) {
 
   ctx.drawImage(source, offsetX, offsetY, targetWidth, targetHeight);
   return output;
+}
+
+async function buildDownloadOutputs(files) {
+  const outputs = [];
+
+  for (const file of files) {
+    if (isImage(file)) {
+      const blob = await processImageToBlob(file, state.p);
+      if (!blob) continue;
+      const safeName = getSafeFileName(file.name, "image", ".png");
+      outputs.push({
+        name: `${safeName}-${state.p}p.png`,
+        blob,
+      });
+      continue;
+    }
+
+    if (isPdf(file)) {
+      const pdfOutputs = await processPdfToBlobs(file, state.p);
+      outputs.push(...pdfOutputs);
+    }
+  }
+
+  return outputs;
+}
+
+async function processImageToBlob(file, size) {
+  const bitmap = await createImageBitmap(file);
+  const output = createFittedCanvas(bitmap, size);
+  return canvasToBlob(output);
+}
+
+async function processPdfToBlobs(file, size) {
+  if (!pdfjs) return [];
+
+  const outputs = [];
+  const doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const baseName = getSafeFileName(file.name, "document", "");
+
+  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+    const page = await doc.getPage(pageNumber);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const renderScale = Math.min(size / baseViewport.width, size / baseViewport.height);
+    const renderViewport = page.getViewport({ scale: Math.max(0.2, renderScale) });
+
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = Math.max(1, Math.floor(renderViewport.width));
+    sourceCanvas.height = Math.max(1, Math.floor(renderViewport.height));
+    const sourceContext = sourceCanvas.getContext("2d", { alpha: false });
+
+    await page.render({
+      canvasContext: sourceContext,
+      viewport: renderViewport,
+    }).promise;
+
+    const outputCanvas = createFittedCanvas(sourceCanvas, size);
+    const blob = await canvasToBlob(outputCanvas);
+    if (!blob) continue;
+
+    outputs.push({
+      name: `${baseName}-page-${pageNumber}-${size}p.png`,
+      blob,
+    });
+  }
+
+  doc.cleanup();
+  return outputs;
 }
 
 async function canvasToBlob(canvas) {
@@ -210,11 +269,13 @@ function getSafeFileName(inputName, fallback, forcedExtension) {
 
 function clearGallery() {
   gallery.replaceChildren();
-  state.downloads = [];
+  state.previewObjectUrls.forEach((url) => URL.revokeObjectURL(url));
+  state.previewObjectUrls = [];
 }
 
-function setDownloadEnabled(enabled) {
-  downloadBtn.disabled = !enabled;
+function updateDownloadButton() {
+  downloadBtn.disabled = !state.hasSupportedFiles || state.isBuildingDownload;
+  downloadBtn.textContent = state.isBuildingDownload ? "building..." : "download";
 }
 
 function renderEmptyState(message = "no files loaded yet") {
